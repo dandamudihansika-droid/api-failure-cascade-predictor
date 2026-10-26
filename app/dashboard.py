@@ -173,7 +173,7 @@ with st.sidebar:
     
     current_idx = nav_options.index(st.session_state.page) if st.session_state.page in nav_options else 0
     selected_nav = st.radio(
-        "NavigationMenu",
+        "nav_selector",
         nav_options,
         index=current_idx,
         label_visibility="collapsed"
@@ -344,7 +344,53 @@ def resolve_current_telemetry():
 
         sim = CascadeSimulator()
         sim_res = sim.whatif(st.session_state.sim_service, st.session_state.sim_severity)
-        return snapshot, f"Simulated Incident ({st.session_state.sim_service} - {st.session_state.sim_severity})", sim_res, []
+
+        # Apply simulated failure and propagation to the active snapshot metrics
+        root_s = st.session_state.sim_service
+        root_sev = st.session_state.sim_severity
+        sev_risk_scores = {"Critical": 92.5, "High": 78.0, "Medium": 54.0, "Low": 8.0}
+        sev_probs = {"Critical": 0.95, "High": 0.82, "Medium": 0.55, "Low": 0.05}
+
+        # Update root service
+        root_mask = snapshot["service_name"] == root_s
+        if root_mask.any():
+            snapshot.loc[root_mask, "pred_cascade_level"] = root_sev
+            snapshot.loc[root_mask, "telemetry_risk_score"] = sev_risk_scores.get(root_sev, 75.0)
+            snapshot.loc[root_mask, "risk_probability"] = sev_probs.get(root_sev, 0.80)
+            snapshot.loc[root_mask, "threshold_flags"] = f"Simulated Injected Failure: {root_sev}"
+
+        # Update impacted downstream/upstream services according to propagation
+        active_alerts = []
+        if root_sev in ["Critical", "High"]:
+            active_alerts.append({
+                "service": root_s,
+                "severity": root_sev,
+                "message": f"Simulated root failure injection active on {root_s} ({root_sev})"
+            })
+
+        for imp in sim_res.get("impacted_services", []):
+            imp_svc = imp.get("service")
+            imp_prob = imp.get("est_failure_prob", 0.0)
+            imp_mask = snapshot["service_name"] == imp_svc
+            if imp_mask.any() and imp_svc != root_s:
+                if imp_prob >= 0.70:
+                    imp_lvl = "Critical" if root_sev == "Critical" else "High"
+                elif imp_prob >= 0.40:
+                    imp_lvl = "Medium"
+                else:
+                    imp_lvl = "Low"
+                snapshot.loc[imp_mask, "pred_cascade_level"] = imp_lvl
+                snapshot.loc[imp_mask, "telemetry_risk_score"] = imp_prob * 100.0
+                snapshot.loc[imp_mask, "risk_probability"] = imp_prob
+                snapshot.loc[imp_mask, "threshold_flags"] = f"Cascade Impact (Hop {imp.get('distance', 1)})"
+                if imp_lvl in ["Critical", "High"]:
+                    active_alerts.append({
+                        "service": imp_svc,
+                        "severity": imp_lvl,
+                        "message": f"Simulated cascade propagation from {root_s} ({imp_lvl})"
+                    })
+
+        return snapshot, f"Simulated Incident ({root_s} - {root_sev})", sim_res, active_alerts
 
     elif st.session_state.scenario == "C. Synthetic Stress Test":
         stress_df, eval_metrics = generate_synthetic_stress_data(
@@ -428,9 +474,9 @@ if st.session_state.page == "Overview":
     st.markdown("<div style='margin-bottom: 6px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: " + THEME["text_muted"] + ";'>🕹️ Operational Telemetry Mode & Demonstration</div>", unsafe_allow_html=True)
     
     mode_options = [
-        "🟢 Normal Operation (Nominal Baseline)",
-        "🔴 Historical Incident Replay (UserService Critical)",
-        "⚠️ High Load Replay (PaymentService High)",
+        "🟢 Normal Operation",
+        "🔴 Historical Incident Replay",
+        "⚠️ High Load Replay",
         "🧪 Custom What-If Simulator"
     ]
     
@@ -454,17 +500,19 @@ if st.session_state.page == "Overview":
     )
     
     if chosen_mode != mode_options[current_mode_idx]:
-        if chosen_mode == "🟢 Normal Operation (Nominal Baseline)":
+        if chosen_mode == "🟢 Normal Operation":
             st.session_state.scenario = "A. Live & Historical Telemetry"
             st.session_state.telemetry_window = "Live Baseline (Healthy: 2026-10-25 23:55)"
-        elif chosen_mode == "🔴 Historical Incident Replay (UserService Critical)":
+        elif chosen_mode == "🔴 Historical Incident Replay":
             st.session_state.scenario = "A. Live & Historical Telemetry"
             st.session_state.telemetry_window = "Historical Outage: UserService Critical (2026-10-23 02:35)"
-        elif chosen_mode == "⚠️ High Load Replay (PaymentService High)":
+        elif chosen_mode == "⚠️ High Load Replay":
             st.session_state.scenario = "A. Live & Historical Telemetry"
             st.session_state.telemetry_window = "Historical Outage: PaymentService High (2026-09-26 08:00)"
         elif chosen_mode == "🧪 Custom What-If Simulator":
-            st.session_state.page = "Cascade Simulator"
+            st.session_state.scenario = "B. Simulated Incident"
+            st.session_state.sim_service = "PaymentService"
+            st.session_state.sim_severity = "Critical"
         st.rerun()
 
     st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
@@ -481,6 +529,17 @@ if st.session_state.page == "Overview":
         highest_svc = highest_row["service_name"]
         highest_lvl = highest_row["pred_cascade_level"]
 
+        # Clarified Subtitle: Explicit breakdown of elevated services vs nominal
+        if at_risk_count == 0:
+            risk_subtitle = "All 14 Nodes Nominal (Low Risk)"
+        else:
+            elevated_parts = []
+            for lvl in ["Critical", "High", "Medium"]:
+                cnt = len(active_snapshot[active_snapshot["pred_cascade_level"] == lvl])
+                if cnt > 0:
+                    elevated_parts.append(f"{cnt} {lvl}")
+            risk_subtitle = f"Elevated: {', '.join(elevated_parts)}" if elevated_parts else f"{at_risk_count} Elevated Services"
+
         # 1. Four Aligned KPI Cards
         kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
         with kpi_col1:
@@ -494,7 +553,7 @@ if st.session_state.page == "Overview":
             render_kpi_card(
                 title="Services at Risk",
                 value=f"{at_risk_count}",
-                subtitle="ML Pred Level != Low",
+                subtitle=risk_subtitle,
                 border_color=THEME["critical"] if at_risk_count > 0 else THEME["low"]
             )
         with kpi_col3:
@@ -512,28 +571,32 @@ if st.session_state.page == "Overview":
                 border_color=THEME["critical"] if len(active_alerts) > 0 else THEME["low"]
             )
 
-        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
         # 2. Prominent Simulator Action Callout
-        st.markdown(
-            f"""
-            <div class='sre-panel' style='background: linear-gradient(90deg, rgba(21, 159, 232, 0.12) 0%, rgba(11, 17, 26, 0.95) 100%); border-left: 4px solid {THEME["bright_blue"]}; padding: 14px 20px; margin-bottom: 16px;'>
-                <div style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;'>
-                    <div style='display: flex; align-items: center; gap: 12px;'>
-                        <div style='background: rgba(56, 189, 248, 0.2); width: 38px; height: 38px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.25rem;'>🧪</div>
+        sim_col1, sim_col2 = st.columns([3.8, 1.2])
+        with sim_col1:
+            st.markdown(
+                f"""
+                <div class='sre-panel' style='background: linear-gradient(90deg, rgba(21, 159, 232, 0.12) 0%, rgba(11, 17, 26, 0.95) 100%); border-left: 3px solid {THEME["bright_blue"]}; padding: 10px 16px; margin-bottom: 0px;'>
+                    <div style='display: flex; align-items: center; gap: 10px;'>
+                        <div style='background: rgba(56, 189, 248, 0.2); width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 1.15rem;'>🧪</div>
                         <div>
-                            <div style='font-size: 0.95rem; font-weight: 700; color: {THEME["text_main"]};'>Cascade Propagation Simulator</div>
-                            <div style='font-size: 0.80rem; color: {THEME["text_muted"]};'>Simulate upstream blast radius and test automated mitigations before outages propagate.</div>
+                            <div style='font-size: 0.90rem; font-weight: 700; color: {THEME["text_main"]};'>Cascade Propagation Simulator</div>
+                            <div style='font-size: 0.77rem; color: {THEME["text_muted"]};'>Simulate upstream blast radius and test automated mitigations before outages propagate.</div>
                         </div>
                     </div>
                 </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        if st.button("Launch Cascade Simulator →", key="btn_overview_sim_launch", type="primary", use_container_width=True):
-            st.session_state.page = "Cascade Simulator"
-            st.rerun()
+                """,
+                unsafe_allow_html=True
+            )
+        with sim_col2:
+            st.markdown("<div style='height: 3px;'></div>", unsafe_allow_html=True)
+            if st.button("Launch Simulator →", key="btn_overview_sim_launch", type="primary", use_container_width=True):
+                st.session_state.page = "Cascade Simulator"
+                st.rerun()
+
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
         # 3. Two-Column Layout: Time-Series + Ranked SRE Services Table
         col_ts, col_ranked = st.columns([1, 1])

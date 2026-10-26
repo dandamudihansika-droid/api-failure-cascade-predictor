@@ -44,6 +44,12 @@ def inject_custom_css():
         color: {THEME["text_main"]};
     }}
 
+    .block-container {{
+        padding-top: 1.0rem !important;
+        padding-bottom: 2rem !important;
+        max-width: 96% !important;
+    }}
+
     /* Sidebar Styling */
     section[data-testid="stSidebar"] {{
         background-color: #070C13 !important;
@@ -51,31 +57,39 @@ def inject_custom_css():
     }}
     
     section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {{
-        gap: 0.75rem;
+        gap: 0.6rem;
     }}
 
-    /* Radio navigation buttons styling */
+    /* Radio navigation buttons styling - hide dummy widget label */
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] > label {{
+        display: none !important;
+    }}
+
+    section[data-testid="stSidebar"] .stRadio label[data-testid="stWidgetLabel"] {{
+        display: none !important;
+    }}
+
     section[data-testid="stSidebar"] .stRadio > div {{
         background-color: transparent;
         gap: 4px;
     }}
     
-    section[data-testid="stSidebar"] .stRadio label {{
+    section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {{
         background-color: #0B121C;
         border: 1px solid #14202F;
         border-radius: 8px;
         padding: 8px 14px;
         cursor: pointer;
         transition: all 0.2s ease;
-        margin-bottom: 4px;
+        margin-bottom: 3px;
         color: {THEME["text_muted"]};
-        font-size: 0.88rem;
+        font-size: 0.86rem;
         font-weight: 500;
         display: flex;
         align-items: center;
     }}
     
-    section[data-testid="stSidebar"] .stRadio label:hover {{
+    section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:hover {{
         border-color: {THEME["bright_blue"]};
         color: {THEME["text_main"]};
         background-color: #0E1825;
@@ -87,9 +101,9 @@ def inject_custom_css():
         background: {THEME["panel_bg"]};
         border: 1px solid {THEME["panel_border"]};
         border-radius: 10px;
-        padding: 18px 22px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45), 0 0 1px rgba(56, 189, 248, 0.15);
-        margin-bottom: 18px;
+        padding: 14px 18px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 1px rgba(56, 189, 248, 0.15);
+        margin-bottom: 12px;
         transition: border-color 0.2s ease;
     }}
 
@@ -102,43 +116,46 @@ def inject_custom_css():
         background: linear-gradient(180deg, rgba(14, 24, 37, 0.9) 0%, {THEME["panel_bg"]} 100%);
         border: 1px solid {THEME["panel_border"]};
         border-top: 2px solid {THEME["bright_blue"]};
-        border-radius: 10px;
-        padding: 16px 20px;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        border-radius: 8px;
+        padding: 12px 14px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        min-height: 110px;
+        min-height: 82px;
         transition: transform 0.15s ease, box-shadow 0.15s ease;
     }}
 
     .kpi-card:hover {{
         transform: translateY(-2px);
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 15px rgba(56, 189, 248, 0.15);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(56, 189, 248, 0.15);
         border-color: {THEME["cerulean"]};
     }}
 
     .kpi-title {{
         color: {THEME["text_muted"]};
-        font-size: 0.76rem;
+        font-size: 0.70rem;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         font-weight: 600;
-        margin-bottom: 6px;
+        margin-bottom: 3px;
     }}
 
     .kpi-value {{
         color: {THEME["text_main"]};
-        font-size: 1.85rem;
+        font-size: 1.30rem;
         font-weight: 700;
         font-family: 'JetBrains Mono', monospace;
-        line-height: 1.1;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }}
 
     .kpi-subtext {{
         color: {THEME["text_muted"]};
-        font-size: 0.78rem;
-        margin-top: 6px;
+        font-size: 0.72rem;
+        margin-top: 4px;
         display: flex;
         align-items: center;
         gap: 6px;
@@ -390,18 +407,28 @@ def get_plotly_layout(height=350, title=None, margin=None):
     )
 
 def render_kpi_card(title, value, subtitle=None, border_color=None):
-    """Renders a styled KPI card with dark theme and glowing accent."""
+    """Renders a styled KPI card with dark theme, responsive font sizing, and glowing accent."""
     top_border = border_color or THEME["bright_blue"]
     subtext_html = f"<div class='kpi-subtext'>{subtitle}</div>" if subtitle else ""
-    card_html = f"""
-    <div class='kpi-card' style='border-top: 2px solid {top_border};'>
-        <div>
-            <div class='kpi-title'>{title}</div>
-            <div class='kpi-value' style='font-size: 1.50rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{value}</div>
-        </div>
-        {subtext_html}
-    </div>
-    """
+    val_str = str(value)
+    
+    # Scale font size dynamically for long service names so PaymentService is never truncated
+    if len(val_str) > 13:
+        val_font_size = "1.10rem"
+    elif len(val_str) > 8:
+        val_font_size = "1.25rem"
+    else:
+        val_font_size = "1.55rem"
+
+    card_html = (
+        f"<div class='kpi-card' style='border-top: 2px solid {top_border};'>"
+        f"<div>"
+        f"<div class='kpi-title'>{title}</div>"
+        f"<div class='kpi-value' style='font-size: {val_font_size}; white-space: nowrap; overflow: visible;' title='{val_str}'>{val_str}</div>"
+        f"</div>"
+        f"{subtext_html}"
+        f"</div>"
+    )
     st.markdown(card_html, unsafe_allow_html=True)
 
 def render_badge(text, level="low"):
